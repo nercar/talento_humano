@@ -1,0 +1,245 @@
+ALTER PROCEDURE actEmpresas
+AS
+BEGIN
+	SET XACT_ABORT ON
+	SET NOCOUNT ON
+
+	DECLARE @emp_cod AS INTEGER
+	DECLARE @emp_nombre AS VARCHAR(50)
+	DECLARE @emp_ruta AS VARCHAR(50)
+	DECLARE @emp_staina AS VARCHAR(50)
+	DECLARE @id_empresa AS VARCHAR(10)
+	DECLARE @SQL AS VARCHAR(MAX)
+
+	EXECUTE ('TRUNCATE EMPRESAS') AT LINK_BBDD_INTRANET_TH
+
+	INSERT INTO OPENQUERY(LINK_BBDD_INTRANET_TH, 'SELECT ID, NOMBRE, DIRECTORIO, ACTIVO, CREATED_AT FROM EMPRESAS')
+	(ID, NOMBRE, DIRECTORIO, ACTIVO, CREATED_AT)
+	SELECT EMP_COD, EMP_NOMBRE, EMP_RUTA, CASE WHEN COALESCE(EMP_STAINA, 0) = 1 THEN 0 ELSE 1 END, GETDATE()
+	FROM OPENQUERY(LINK_FX_RRHH_RHNM_PROD, 'SELECT EMP_COD, EMP_NOMBRE, EMP_RUTA, EMP_STAINA FROM NM_EMPRESAS')
+
+	DECLARE cEmpresas CURSOR FOR
+		SELECT * FROM OPENQUERY(LINK_BBDD_INTRANET_TH, 'SELECT ID FROM EMPRESAS WHERE ACTIVO = 1')
+	
+	OPEN cEmpresas
+	FETCH NEXT FROM cEmpresas INTO @emp_cod
+
+	WHILE @@fetch_status = 0
+	BEGIN
+		IF (@emp_cod <= 9)
+		BEGIN
+			SET @id_empresa = '0' + LTRIM(RTRIM(CAST(@emp_cod AS VARCHAR(2))))
+		END
+		ELSE
+		BEGIN
+			SET @id_empresa = @emp_cod
+		END
+		SET @id_empresa = 'BD' + @id_empresa
+		
+		EXECUTE actDepartamentos @id_empresa, @emp_cod
+		EXECUTE actCargos @id_empresa, @emp_cod
+		EXECUTE actEmpleados @id_empresa, @emp_cod
+		
+		FETCH NEXT FROM cEmpresas INTO @emp_cod
+	END
+
+	CLOSE cEmpresas
+	DEALLOCATE cEmpresas
+
+	SET XACT_ABORT OFF
+	SET NOCOUNT OFF
+END
+
+ALTER PROCEDURE [dbo].[actDepartamentos]
+	@id_empresa AS VARCHAR(10),
+	@cod_empresa AS INTEGER
+AS
+BEGIN
+	SET XACT_ABORT ON
+	SET NOCOUNT ON
+
+	DECLARE @coddpto AS INTEGER
+	DECLARE @nombre AS VARCHAR(50)
+	DECLARE @SQL AS VARCHAR(MAX)
+	
+	SET @SQL = '
+	DECLARE cDptos CURSOR FOR
+		SELECT * FROM OPENQUERY(LINK_FX_RRHH_' + @id_empresa + '_PROD, ''SELECT UBI_COD, UPPER(UBI_DESC) AS UBI_DESC FROM NM_UBICACION'')'
+	
+	EXEC (@SQL)
+
+	OPEN cDptos
+	FETCH NEXT FROM cDptos INTO @coddpto, @nombre
+
+	WHILE @@fetch_status = 0
+	BEGIN
+		SET @SQL = '
+		DECLARE @id AS INTEGER
+		SELECT @id=count(id) FROM OPENQUERY(LINK_BBDD_INTRANET_TH, ''SELECT ID FROM DEPARTAMENTOS WHERE ID = ' +
+			CAST(@coddpto AS VARCHAR(10)) + ' AND ID_EMPRESA = ' + CAST(@cod_empresa AS VARCHAR(10)) + ''')
+		IF (@id = 0)
+		BEGIN
+			INSERT OPENQUERY (LINK_BBDD_INTRANET_TH, ''SELECT ID, NOMBRE, ID_EMPRESA, CREATED_AT FROM DEPARTAMENTOS'') 
+			VALUES(' + CAST(@coddpto AS VARCHAR(10)) + ', ''' + UPPER(RTRIM(LTRIM(@nombre))) + ''', ''' +
+				CAST(@cod_empresa AS VARCHAR(10)) + ''', ''' + CAST(GETDATE() AS VARCHAR(20)) + ''')
+		END
+		ELSE
+		BEGIN
+			DECLARE @nomori AS VARCHAR(50)
+			SELECT @nomori=RTRIM(LTRIM(NOMBRE)) FROM OPENQUERY(LINK_BBDD_INTRANET_TH,
+		 		''SELECT NOMBRE, UPDATED_AT
+		 			FROM DEPARTAMENTOS WHERE ID = ' +
+		 			CAST(@coddpto AS VARCHAR(10)) + ' AND ID_EMPRESA = ' + CAST(@cod_empresa AS VARCHAR(10)) + ''')
+			IF (@nomori != ''' + RTRIM(LTRIM(@nombre)) + ''')
+			BEGIN
+				UPDATE OPENQUERY(LINK_BBDD_INTRANET_TH, ''SELECT NOMBRE, UPDATED_AT FROM DEPARTAMENTOS WHERE ID = ' +
+					CAST(@coddpto AS VARCHAR(10)) + ' AND ID_EMPRESA = ' + CAST(@cod_empresa AS VARCHAR(10)) + ''')
+				SET NOMBRE = ''' + UPPER(RTRIM(LTRIM(@nombre))) + ''', UPDATED_AT = ''' + CAST(GETDATE() AS VARCHAR(20)) + '''
+			END
+		END'
+		EXECUTE (@SQL)
+		FETCH NEXT FROM cDptos INTO @coddpto, @nombre
+	END
+
+	CLOSE cDptos
+	DEALLOCATE cDptos
+
+	SET XACT_ABORT OFF
+	SET NOCOUNT OFF
+END
+
+ALTER PROCEDURE actCargos
+	@id_empresa AS VARCHAR(10),
+	@cod_empresa AS INTEGER
+AS
+BEGIN
+	SET XACT_ABORT ON
+	SET NOCOUNT ON
+
+	DECLARE @codcargo AS INTEGER
+	DECLARE @nombre AS VARCHAR(50)
+	DECLARE @SQL AS VARCHAR(MAX)
+	
+	SET @SQL = '
+	DECLARE cCargos CURSOR FOR
+		SELECT * FROM OPENQUERY(LINK_FX_RRHH_' + @id_empresa + '_PROD, ''SELECT CAR_COD, CAR_DESC FROM NM_CARGOS'')'
+	
+	EXEC (@SQL)
+
+	OPEN cCargos
+	FETCH NEXT FROM cCargos INTO @codcargo, @nombre
+
+	WHILE @@fetch_status = 0
+	BEGIN
+		SET @SQL = '
+		DECLARE @id AS INTEGER
+		SELECT @id=count(id) FROM OPENQUERY(LINK_BBDD_INTRANET_TH, ''SELECT ID FROM CARGOS WHERE ID = ' +
+			CAST(@codcargo AS VARCHAR(10)) + ' AND ID_EMPRESA = ' + CAST(@cod_empresa AS VARCHAR(10)) + ''')
+		IF (@id = 0)
+		BEGIN
+			INSERT OPENQUERY (LINK_BBDD_INTRANET_TH, ''SELECT ID, NOMBRE, ID_EMPRESA, CREATED_AT FROM CARGOS'') 
+			VALUES(' + CAST(@codcargo AS VARCHAR(10)) + ', ''' + RTRIM(LTRIM(@nombre)) + ''', ''' + CAST(@cod_empresa AS VARCHAR(10)) + ''', ''' + CAST(GETDATE() AS VARCHAR(20)) + ''')
+		END
+		ELSE
+		BEGIN
+			DECLARE @nomori AS VARCHAR(50)
+			SELECT @nomori=RTRIM(LTRIM(NOMBRE)) FROM OPENQUERY(LINK_BBDD_INTRANET_TH,
+		 		''SELECT NOMBRE, UPDATED_AT
+		 			FROM CARGOS WHERE ID = ' + CAST(@codcargo AS VARCHAR(10)) +
+		 			' AND ID_EMPRESA = ' + CAST(@cod_empresa AS VARCHAR(10)) + ''')
+			IF (@nomori != ''' + RTRIM(LTRIM(@nombre)) + ''')
+			BEGIN
+				UPDATE OPENQUERY(LINK_BBDD_INTRANET_TH, ''SELECT NOMBRE, UPDATED_AT FROM CARGOS WHERE ID = ' +
+					CAST(@codcargo AS VARCHAR(10)) + ' AND ID_EMPRESA = ' + CAST(@cod_empresa AS VARCHAR(10)) + ''')
+				SET NOMBRE = ''' + RTRIM(LTRIM(@nombre)) + ''', UPDATED_AT = ''' + CAST(GETDATE() AS VARCHAR(20)) + '''
+			END
+		END'
+		EXECUTE (@SQL)
+		FETCH NEXT FROM cCargos INTO @codcargo, @nombre
+	END
+
+	CLOSE cCargos
+	DEALLOCATE cCargos
+
+	SET XACT_ABORT OFF
+	SET NOCOUNT OFF
+END
+
+ALTER PROCEDURE actEmpleados
+	@id_empresa AS VARCHAR(10),
+	@cod_empresa AS INTEGER
+AS
+BEGIN
+	SET XACT_ABORT ON
+	SET NOCOUNT ON
+
+	DECLARE @cedula AS INTEGER
+	DECLARE @codcargo AS INTEGER
+	DECLARE @coddpto AS INTEGER
+	DECLARE @nombre AS VARCHAR(50)
+	DECLARE @apellido AS VARCHAR(50)
+	DECLARE @activo AS VARCHAR(1)
+	DECLARE @reg AS INTEGER
+	DECLARE @id AS INTEGER
+	DECLARE @SQL AS VARCHAR(MAX)
+
+	SET @SQL = '
+	DECLARE cEmpleados CURSOR FOR
+		SELECT * FROM OPENQUERY(LINK_FX_RRHH_' + @id_empresa + '_PROD, ''SELECT EMP_CED, EMP_APE, EMP_NOM, EMP_CODCAR, EMP_CODUBI, EMP_STASIT
+			FROM NM_EMPLEADOS'')'
+	
+	EXEC (@SQL)
+
+	OPEN cEmpleados
+	FETCH NEXT FROM cEmpleados INTO @cedula, @apellido, @nombre, @codcargo, @coddpto, @activo
+
+	WHILE @@fetch_status = 0
+	BEGIN
+		IF (@activo='A')
+		BEGIN
+			SET @activo = '1'
+		END
+		ELSE
+		BEGIN
+			SET @activo = '0'
+		END
+		SET @SQL = '
+		DECLARE @id AS INTEGER
+		SELECT @id=count(id) FROM OPENQUERY(LINK_BBDD_INTRANET_TH, ''SELECT ID FROM EMPLEADOS WHERE ID = ' +
+			CAST(@cedula AS VARCHAR(10)) + ' AND ID_EMPRESA = ' + CAST(@cod_empresa AS VARCHAR(10)) + ' 
+			AND (NOMBRE != ''''' + RTRIM(LTRIM(@nombre)) + ''''' OR
+				APELLIDO != ''''' + RTRIM(LTRIM(@apellido)) + ''''' OR 
+				ID_CARGO != ''''' + CAST(@codcargo AS VARCHAR(10)) + ''''' OR 
+				ID_DEPARTAMENTO != ''''' + CAST(@coddpto AS VARCHAR(10)) + ''''' OR 
+				ACTIVO != ' + @activo + ')'')
+		IF (@id > 0)
+		BEGIN
+			DELETE FROM OPENQUERY(LINK_BBDD_INTRANET_TH, ''SELECT ID, ID_EMPRESA FROM EMPLEADOS WHERE ID = ' +
+					CAST(@cedula AS VARCHAR(10)) + ' AND ID_EMPRESA = ' + CAST(@cod_empresa AS VARCHAR(10)) + ''')
+			INSERT OPENQUERY (LINK_BBDD_INTRANET_TH, ''SELECT ID, APELLIDO, NOMBRE, ID_CARGO, ID_DEPARTAMENTO, ID_EMPRESA, ACTIVO, CREATED_AT FROM EMPLEADOS'') 
+			VALUES(' + CAST(@cedula AS VARCHAR(10)) + ', ''' + RTRIM(LTRIM(@apellido))+ ''', ''' +
+				RTRIM(LTRIM(@nombre)) + ''', ' + CAST(@codcargo AS VARCHAR(10)) + ', ' + CAST(@coddpto AS VARCHAR(10)) + ', ' +
+				CAST(@cod_empresa AS VARCHAR(10)) + ', ''' + @activo + ''', ''' + CAST(GETDATE() AS VARCHAR(20)) + ''')
+		END
+		IF (@id = 0)
+		BEGIN
+			SELECT @id=count(id) FROM OPENQUERY(LINK_BBDD_INTRANET_TH, ''SELECT ID FROM EMPLEADOS WHERE ID = ' +
+				CAST(@cedula AS VARCHAR(10)) + ' AND ID_EMPRESA = ' + CAST(@cod_empresa AS VARCHAR(10)) + ''')
+			IF (@id = 0)
+			BEGIN
+				INSERT OPENQUERY (LINK_BBDD_INTRANET_TH, ''SELECT ID, APELLIDO, NOMBRE, ID_CARGO, ID_DEPARTAMENTO, ID_EMPRESA, ACTIVO, CREATED_AT FROM EMPLEADOS'') 
+				VALUES(' + CAST(@cedula AS VARCHAR(10)) + ', ''' + RTRIM(LTRIM(@apellido))+ ''', ''' +
+					RTRIM(LTRIM(@nombre)) + ''', ' + CAST(@codcargo AS VARCHAR(10)) + ', ' + CAST(@coddpto AS VARCHAR(10)) + ', ' +
+					CAST(@cod_empresa AS VARCHAR(10)) + ', ''' + @activo + ''', ''' + CAST(GETDATE() AS VARCHAR(20)) + ''')
+			END
+		END'
+		EXECUTE (@SQL)
+		FETCH NEXT FROM cEmpleados INTO @cedula, @apellido, @nombre, @codcargo, @coddpto, @activo
+	END
+
+	CLOSE cEmpleados
+	DEALLOCATE cEmpleados
+
+	SET XACT_ABORT OFF
+	SET NOCOUNT OFF
+END
